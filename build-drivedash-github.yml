@@ -1,0 +1,74 @@
+name: Build DriveDash Golf APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find Android project (folder or ZIP)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/drivedash-source"
+
+          # First support a project whose folders were extracted into the repository.
+          SETTINGS_FILE="$(find . -type f \( -name settings.gradle -o -name settings.gradle.kts \) -not -path './.git/*' | head -n 1 || true)"
+
+          # If no extracted project exists, look for an Android project ZIP anywhere in the repository.
+          if [ -z "$SETTINGS_FILE" ]; then
+            ZIP_FILE="$(find . -type f -iname '*.zip' -not -path './.git/*' | head -n 1 || true)"
+            if [ -z "$ZIP_FILE" ]; then
+              echo 'Android project not found. Add the DriveDash project folder (containing settings.gradle) or upload its ZIP into this repository, then run the workflow again.'
+              echo 'Repository files:'
+              find . -maxdepth 3 -type f | sort | head -200
+              exit 1
+            fi
+            unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/drivedash-source"
+            SETTINGS_FILE="$(find "$RUNNER_TEMP/drivedash-source" -type f \( -name settings.gradle -o -name settings.gradle.kts \) | head -n 1 || true)"
+          fi
+
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo 'ZIP was found, but it does not contain settings.gradle or settings.gradle.kts.'
+            exit 1
+          fi
+
+          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Android project found at: $PROJECT_DIR"
+          test -f "$PROJECT_DIR/app/build.gradle" -o -f "$PROJECT_DIR/app/build.gradle.kts"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Build debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: gradle --no-daemon assembleDebug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DriveDashGolf-debug-apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
